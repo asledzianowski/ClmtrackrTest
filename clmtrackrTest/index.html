@@ -1,0 +1,295 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+    <title>Face tracker</title>
+    <meta charset="utf-8">
+    <link href="Style/bootstrap.min.css" rel="stylesheet" type="text/css">
+    <style>
+        @import url(https://fonts.googleapis.com/css?family=Lato:300italic,700italic,300,700);
+
+        body {
+            font-family: 'Lato';
+            background-color: #f0f0f0;
+            margin: 0px auto;
+            max-width: 1150px;
+        }
+
+        #overlay {
+            position: absolute;
+            top: 0px;
+            left: 0px;
+            -o-transform: scaleX(-1);
+            -webkit-transform: scaleX(-1);
+            transform: scaleX(-1);
+            -ms-filter: fliph; /*IE*/
+            filter: fliph; /*IE*/
+        }
+
+        #videoel {
+            -o-transform: scaleX(-1);
+            -webkit-transform: scaleX(-1);
+            transform: scaleX(-1);
+            -ms-filter: fliph; /*IE*/
+            filter: fliph; /*IE*/
+        }
+
+        #container {
+            position: relative;
+            width: 370px;
+            /*margin : 0px auto;*/
+        }
+
+        #content {
+            margin-top: 50px;
+            margin-left: auto;
+            margin-right: auto;
+            max-width: 600px;
+        }
+
+        h2 {
+            font-weight: 400;
+        }
+
+        .btn {
+            font-family: 'Lato';
+            font-size: 16px;
+        }
+
+        #controls {
+            text-align: center;
+        }
+
+        #emotion_container {
+            width: 600px;
+        }
+
+        #emotion_icons {
+            height: 50px;
+            padding-left: 40px;
+        }
+
+        .emotion_icon {
+            width: 40px;
+            height: 40px;
+            margin-top: 5px;
+            /*margin-left : 13px;*/
+            margin-left: 35px;
+        }
+
+        #emotion_chart, #emotion_icons {
+            margin: 0 auto;
+            width: 400px;
+        }
+
+        #icon1, #icon2, #icon3, #icon4, #icon5, #icon6 {
+            visibility: hidden;
+        }
+
+        /* d3 */
+        .bar {
+            fill: steelblue;
+            fill-opacity: .9;
+        }
+    </style>
+    <script>
+			// getUserMedia only works over https in Chrome 47+, so we redirect to https. Also notify user if running from file.
+			if (window.location.protocol == "file:") {
+				alert("You seem to be running this example directly from a file. Note that these examples only work when served from a server or localhost due to canvas cross-domain restrictions.");
+			} else if (window.location.hostname !== "localhost" && window.location.protocol !== "https:"){
+				window.location.protocol = "https";
+			}
+    </script>
+  
+</head>
+<body>
+    <script src="https://code.jquery.com/jquery-3.1.0.js"></script>
+    <script src="Scripts/utils.js"></script>
+    <script src="Scripts//clmtrackr.js"></script>
+    <script src="Scripts/model_pca_20_svm.js"></script>
+  
+    <script src="Scripts/emotion_classifier.js"></script>
+    <script src="Scripts/emotionmodel.js"></script>
+    <div id="content">
+       
+        <div id="container">
+            <video id="videoel" width="400" height="300" preload="auto" loop playsinline autoplay></video>
+            <canvas id="overlay" width="400" height="300"></canvas>
+        </div>
+       
+        <div id="controls"  style="width:400px">
+            <input class="btn" type="button" value="wait, loading video" disabled="disabled" onclick="startVideo()" id="startbutton" style="width:100%"></input>
+        </div>
+         <div id="emotion_container" style="width:400px;">
+             <div>
+                 <span>happy:</span> <span id="happyStatus"></span>
+             </div>
+             <div>
+                 <span>surprised:</span> <span id="surprisedStatus"></span>
+             </div>
+             <div>
+                 <span>sad:</span> <span id="sadStatus"></span>
+             </div>
+             <div>
+                 <span>fear:</span> <span id="fearStatus"></span>
+             </div>
+             <div>
+                 <span>disgusted:</span> <span id="disgustedStatus"></span>
+             </div>
+             <div>
+                 <span>angry:</span> <span id="angryStatus"></span>
+             </div>
+        </div>
+        <div id="score_container" style="width:400px;">
+            <div>
+                <span>current score:</span> <span id="scoreStatus"></span>
+            </div>
+        </div>
+
+
+
+            <script>
+                var vid = document.getElementById('videoel');
+                var vid_width = vid.width;
+                var vid_height = vid.height;
+                var overlay = document.getElementById('overlay');
+                var overlayCC = overlay.getContext('2d');
+
+
+                var ec = new emotionClassifier();
+                ec.init(emotionModel);
+                var emotionData = ec.getBlank();
+
+
+                /********** check and set up video/webcam **********/
+
+                function enablestart() {
+                    var startbutton = document.getElementById('startbutton');
+                    startbutton.value = "start";
+                    startbutton.disabled = null;
+                }
+
+                function adjustVideoProportions() {
+                    // resize overlay and video if proportions are different
+                    // keep same height, just change width
+                    var proportion = vid.videoWidth / vid.videoHeight;
+                    vid_width = Math.round(vid_height * proportion);
+                    vid.width = vid_width;
+                    overlay.width = vid_width;
+                }
+
+                function gumSuccess(stream) {
+                    // add camera stream if getUserMedia succeeded
+                    if ("srcObject" in vid) {
+                        vid.srcObject = stream;
+                    } else {
+                        vid.src = (window.URL && window.URL.createObjectURL(stream));
+                    }
+                    vid.onloadedmetadata = function () {
+                        adjustVideoProportions();
+                        vid.play();
+                    }
+                    vid.onresize = function () {
+                        adjustVideoProportions();
+                        if (trackingStarted) {
+                            ctrack.stop();
+                            ctrack.reset();
+                            ctrack.start(vid);
+                        }
+                    }
+                }
+
+                function gumFail() {
+                    alert("There was some problem trying to fetch video from your webcam. If you have a webcam, please make sure to accept when the browser asks for access to your webcam.");
+                }
+
+                navigator.getUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia || navigator.msGetUserMedia;
+                window.URL = window.URL || window.webkitURL || window.msURL || window.mozURL;
+
+                // check for camerasupport
+                if (navigator.mediaDevices) {
+                    navigator.mediaDevices.getUserMedia({ video: true }).then(gumSuccess).catch(gumFail);
+                } else if (navigator.getUserMedia) {
+                    navigator.getUserMedia({ video: true }, gumSuccess, gumFail);
+                } else {
+                    alert("This demo depends on getUserMedia, which your browser does not seem to support. :(");
+                }
+
+                vid.addEventListener('canplay', enablestart, false);
+
+               
+
+                /*********** setup of emotion detection *************/
+
+                // set eigenvector 9 and 11 to not be regularized. This is to better detect motion of the eyebrows
+                pModel.shapeModel.nonRegularizedVectors.push(9);
+                pModel.shapeModel.nonRegularizedVectors.push(11);
+
+                var ctrack = new clm.tracker({ useWebGL: true });
+                ctrack.init(pModel);
+                var trackingStarted = false;
+
+                function startVideo() {
+                    // start video
+                    vid.play();
+                    // start tracking
+                    ctrack.start(vid);
+                    trackingStarted = true;
+                    // start loop to draw face
+                    drawLoop();
+                }
+
+                function drawLoop() {
+                    //hook for loop in utils.js
+                    requestAnimFrame(drawLoop);
+
+                    overlayCC.clearRect(0, 0, vid_width, vid_height);
+                    $("#scoreStatus").html(ctrack.getScore().toFixed(4));
+                  
+                    if (ctrack.getCurrentPosition()) {
+                        //Draw landmarks
+                        ctrack.draw(overlay);
+                    }
+                    var cp = ctrack.getCurrentParameters();
+
+                    //Try get current emotion predictions 
+                    var er = ec.meanPredict(cp);
+                    if (er) {
+                        // Pass data to output results function
+                        updateData(er);
+                    }
+                }
+
+
+                function updateData(data) {
+
+                    for (var i = 0; i < data.length; i++) {
+
+                        $("#" + data[i].emotion + "Status").html(data[i].value);
+                        if(data[i].value > 0.5)
+                        {
+                            $("#" + data[i].emotion + "Status").css('background-color', 'red');
+                        }
+                        else
+                        {
+                            $("#" + data[i].emotion + "Status").css('background-color', 'transparent');
+                        }
+                    }
+                }
+
+                // detect if tracker fails to find a face
+                document.addEventListener("clmtrackrNotFound", function (event) {
+                    ctrack.stop();
+                    alert("The tracking had problems with finding a face. Try to sit right in front of the camera or check the lighting quality.")
+                }, false);
+
+                // detect if tracker loses tracking of face
+                document.addEventListener("clmtrackrLost", function (event) {
+                    //ctrack.stop();
+                    alert("The tracking had problems converging on a face. Try to sit right in front of the camera or check the lighting quality.")
+                }, false);
+
+            </script>
+        </div>
+</body>
+</html>
+
